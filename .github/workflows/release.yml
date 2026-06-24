@@ -19,26 +19,30 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.name }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: windows-amd64
-            os: windows-latest
+          - os: windows-latest
+            target: windows-amd64
             goos: windows
             goarch: amd64
             cc: gcc
             ext: dll
-            archive: cpa-response-id-fixer-windows-amd64.zip
-          - name: linux-amd64
-            os: ubuntu-latest
+          - os: ubuntu-latest
+            target: linux-amd64
             goos: linux
             goarch: amd64
             cc: gcc
             ext: so
-            archive: cpa-response-id-fixer-linux-amd64.zip
+          - os: macos-latest
+            target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            cc: clang
+            ext: dylib
 
     steps:
       - name: Checkout
@@ -85,13 +89,13 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/cpa-response-id-fixer.${{ matrix.ext }}", "dist/README.md" -DestinationPath "dist/${{ matrix.archive }}" -Force
+          Compress-Archive -Path "dist/cpa-response-id-fixer.${{ matrix.ext }}", "dist/README.md" -DestinationPath "dist/cpa-response-id-fixer-${{ matrix.target }}.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: dist/${{ matrix.archive }}
+          name: ${{ matrix.target }}
+          path: dist/cpa-response-id-fixer-${{ matrix.target }}.zip
           if-no-files-found: error
 
   release:

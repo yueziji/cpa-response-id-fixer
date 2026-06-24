@@ -43,11 +43,13 @@ It builds:
 
 - `cpa-response-id-fixer-windows-amd64.zip`
 - `cpa-response-id-fixer-linux-amd64.zip`
+- `cpa-response-id-fixer-darwin-arm64.zip`
 
 Each zip contains a stable plugin file name:
 
 - Windows: `cpa-response-id-fixer.dll`
 - Linux: `cpa-response-id-fixer.so`
+- macOS: `cpa-response-id-fixer.dylib`
 
 Push a version tag to publish a Release automatically:
 
