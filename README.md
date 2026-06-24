@@ -17,7 +17,7 @@ All other chunks pass through unchanged.
 
 ## Performance notes
 
-CPA calls enabled stream interceptors for stream chunks before sending them downstream. This plugin now exits early unless `SourceFormat` is `openai-response`, so non-Responses streams avoid the heavier body/history decoding inside the plugin.
+CPA calls enabled stream interceptors for stream chunks before sending them downstream. This plugin now exits early unless `SourceFormat` is `openai-response` and the chunk body contains `response.completed`, so non-Responses streams and ordinary Responses delta chunks avoid the heavier history/header decoding inside the plugin.
 
 There is still a small global interceptor-call cost while the plugin is enabled, including one stream header initialization call before the first payload. For zero overhead on non-Responses streams, this repair would need to live in CPA core or CPA would need protocol-scoped stream interceptors.
 

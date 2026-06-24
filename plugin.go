@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -29,31 +30,53 @@ type capabilities struct {
 }
 
 type streamChunkPeek struct {
-	SourceFormat string `json:"SourceFormat"`
-	ChunkIndex   int    `json:"ChunkIndex"`
+	SourceFormat string          `json:"SourceFormat"`
+	ChunkIndex   int             `json:"ChunkIndex"`
+	Body         json.RawMessage `json:"Body"`
+}
+
+type streamChunkRepairContext struct {
+	Model           string   `json:"Model"`
+	RequestedModel  string   `json:"RequestedModel"`
+	OriginalRequest []byte   `json:"OriginalRequest"`
+	RequestBody     []byte   `json:"RequestBody"`
+	HistoryChunks   [][]byte `json:"HistoryChunks"`
 }
 
 const openAIResponseSourceFormat = "openai-response"
+
+var emptyStreamChunkInterceptResponseEnvelope = mustOKEnvelope(pluginapi.StreamChunkInterceptResponse{})
 
 func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		return okEnvelope(pluginRegistration())
 	case pluginabi.MethodResponseInterceptStreamChunk:
-		handled, errShouldHandle := shouldHandleStreamChunk(request)
+		peek, body, handled, errShouldHandle := shouldHandleStreamChunk(request)
 		if errShouldHandle != nil {
 			return nil, errShouldHandle
 		}
 		if !handled {
-			return okEnvelope(pluginapi.StreamChunkInterceptResponse{})
+			return emptyStreamChunkInterceptResponseEnvelope, nil
 		}
-		var req pluginapi.StreamChunkInterceptRequest
-		if errUnmarshal := json.Unmarshal(request, &req); errUnmarshal != nil {
+
+		var repairContext streamChunkRepairContext
+		if errUnmarshal := json.Unmarshal(request, &repairContext); errUnmarshal != nil {
 			return nil, errUnmarshal
+		}
+		req := pluginapi.StreamChunkInterceptRequest{
+			SourceFormat:    openAIResponseSourceFormat,
+			Model:           repairContext.Model,
+			RequestedModel:  repairContext.RequestedModel,
+			OriginalRequest: repairContext.OriginalRequest,
+			RequestBody:     repairContext.RequestBody,
+			Body:            body,
+			HistoryChunks:   repairContext.HistoryChunks,
+			ChunkIndex:      peek.ChunkIndex,
 		}
 		repaired := repairStreamChunk(req)
 		if len(repaired) == 0 {
-			return okEnvelope(pluginapi.StreamChunkInterceptResponse{})
+			return emptyStreamChunkInterceptResponseEnvelope, nil
 		}
 		return okEnvelope(pluginapi.StreamChunkInterceptResponse{Body: repaired})
 	default:
@@ -61,15 +84,33 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	}
 }
 
-func shouldHandleStreamChunk(request []byte) (bool, error) {
+func shouldHandleStreamChunk(request []byte) (streamChunkPeek, []byte, bool, error) {
 	var peek streamChunkPeek
 	if errUnmarshal := json.Unmarshal(request, &peek); errUnmarshal != nil {
-		return false, errUnmarshal
+		return streamChunkPeek{}, nil, false, errUnmarshal
 	}
 	if peek.ChunkIndex == pluginapi.StreamChunkHeaderInitIndex {
-		return false, nil
+		return peek, nil, false, nil
 	}
-	return peek.SourceFormat == openAIResponseSourceFormat, nil
+	if peek.SourceFormat != openAIResponseSourceFormat {
+		return peek, nil, false, nil
+	}
+
+	var body []byte
+	if len(peek.Body) > 0 {
+		if errUnmarshal := json.Unmarshal(peek.Body, &body); errUnmarshal != nil {
+			return peek, nil, false, errUnmarshal
+		}
+	}
+	if !streamChunkBodyMayNeedRepair(body) {
+		return peek, nil, false, nil
+	}
+	return peek, body, true, nil
+}
+
+func streamChunkBodyMayNeedRepair(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	return len(trimmed) > 0 && bytes.Contains(trimmed, responseCompletedMarker)
 }
 
 func pluginRegistration() registration {
@@ -77,7 +118,7 @@ func pluginRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             "cpa-response-id-fixer",
-			Version:          "0.0.3",
+			Version:          "0.0.5",
 			Author:           "local",
 			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
 			ConfigFields:     []pluginapi.ConfigField{},
@@ -94,6 +135,14 @@ func okEnvelope(v any) ([]byte, error) {
 		return nil, errMarshal
 	}
 	return json.Marshal(envelope{OK: true, Result: raw})
+}
+
+func mustOKEnvelope(v any) []byte {
+	raw, errMarshal := okEnvelope(v)
+	if errMarshal != nil {
+		panic(errMarshal)
+	}
+	return raw
 }
 
 func errorEnvelope(code, message string) []byte {

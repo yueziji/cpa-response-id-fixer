@@ -5,7 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -13,17 +13,33 @@ import (
 
 const fallbackIDPrefix = "resp_cpa_"
 
-var responseCompletedMarker = []byte("response.completed")
+var (
+	responseCompletedMarker = []byte("response.completed")
+	sseDataPrefix           = []byte("data:")
+	sseDonePayload          = []byte("[DONE]")
+	lineFeed                = []byte("\n")
+	carriageReturnLineFeed  = []byte("\r\n")
+)
+
+type responseIDPayload struct {
+	Response struct {
+		ID string `json:"id"`
+	} `json:"response"`
+	ResponseID string `json:"response_id"`
+}
 
 func repairStreamChunk(req pluginapi.StreamChunkInterceptRequest) []byte {
-	if req.ChunkIndex == pluginapi.StreamChunkHeaderInitIndex || len(bytes.TrimSpace(req.Body)) == 0 {
+	if req.ChunkIndex == pluginapi.StreamChunkHeaderInitIndex {
 		return nil
 	}
-	if !bytes.Contains(req.Body, responseCompletedMarker) {
+	trimmedBody := bytes.TrimSpace(req.Body)
+	if len(trimmedBody) == 0 || !bytes.Contains(trimmedBody, responseCompletedMarker) {
 		return nil
 	}
-	if repaired, changed := repairResponseCompletedJSON(req.Body, req); changed {
-		return repaired
+	if trimmedBody[0] == '{' {
+		if repaired, changed := repairResponseCompletedJSON(trimmedBody, req); changed {
+			return repaired
+		}
 	}
 	if repaired, changed := repairSSEDataLines(req.Body, req); changed {
 		return repaired
@@ -34,6 +50,7 @@ func repairStreamChunk(req pluginapi.StreamChunkInterceptRequest) []byte {
 func repairSSEDataLines(body []byte, req pluginapi.StreamChunkInterceptRequest) ([]byte, bool) {
 	remaining := body
 	var out bytes.Buffer
+	out.Grow(len(body))
 	changed := false
 
 	for len(remaining) > 0 {
@@ -44,9 +61,12 @@ func repairSSEDataLines(body []byte, req pluginapi.StreamChunkInterceptRequest) 
 		prefix, data, ok := splitSSEDataLine(line)
 		if ok {
 			payload := bytes.TrimSpace(data)
-			if len(payload) > 0 && !bytes.Equal(payload, []byte("[DONE]")) {
+			if len(payload) > 0 && !bytes.Equal(payload, sseDonePayload) {
 				if repaired, didRepair := repairResponseCompletedJSON(payload, req); didRepair {
-					next = append(append(bytes.Clone(prefix), ' '), repaired...)
+					next = make([]byte, 0, len(prefix)+1+len(repaired))
+					next = append(next, prefix...)
+					next = append(next, ' ')
+					next = append(next, repaired...)
 					changed = true
 				}
 			}
@@ -68,10 +88,10 @@ func nextLine(raw []byte) (line, eol, rest []byte) {
 		return raw, nil, nil
 	}
 	line = raw[:index]
-	eol = []byte("\n")
+	eol = lineFeed
 	if bytes.HasSuffix(line, []byte("\r")) {
 		line = line[:len(line)-1]
-		eol = []byte("\r\n")
+		eol = carriageReturnLineFeed
 	}
 	return line, eol, raw[index+1:]
 }
@@ -79,10 +99,10 @@ func nextLine(raw []byte) (line, eol, rest []byte) {
 func splitSSEDataLine(line []byte) (prefix, data []byte, ok bool) {
 	trimmedLeft := bytes.TrimLeft(line, " \t")
 	leadingLen := len(line) - len(trimmedLeft)
-	if !bytes.HasPrefix(trimmedLeft, []byte("data:")) {
+	if !bytes.HasPrefix(trimmedLeft, sseDataPrefix) {
 		return nil, nil, false
 	}
-	prefixEnd := leadingLen + len("data:")
+	prefixEnd := leadingLen + len(sseDataPrefix)
 	return line[:prefixEnd], line[prefixEnd:], true
 }
 
@@ -176,16 +196,14 @@ func responseIDFromChunk(chunk []byte) string {
 }
 
 func responseIDFromJSON(raw []byte) string {
-	root, ok := decodeJSONObject(bytes.TrimSpace(raw))
-	if !ok {
+	var payload responseIDPayload
+	if errUnmarshal := json.Unmarshal(bytes.TrimSpace(raw), &payload); errUnmarshal != nil {
 		return ""
 	}
-	if response, ok := root["response"].(map[string]any); ok {
-		if id := strings.TrimSpace(stringField(response, "id")); id != "" {
-			return id
-		}
+	if id := strings.TrimSpace(payload.Response.ID); id != "" {
+		return id
 	}
-	if id := strings.TrimSpace(stringField(root, "response_id")); id != "" {
+	if id := strings.TrimSpace(payload.ResponseID); id != "" {
 		return id
 	}
 	return ""
@@ -201,7 +219,8 @@ func synthesizeResponseID(req pluginapi.StreamChunkInterceptRequest, payload []b
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(req.RequestBody)
 	_, _ = hash.Write([]byte{0})
-	_, _ = fmt.Fprintf(hash, "%d", req.ChunkIndex)
+	var chunkIndexBuffer [20]byte
+	_, _ = hash.Write(strconv.AppendInt(chunkIndexBuffer[:0], int64(req.ChunkIndex), 10))
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(payload)
 	sum := hash.Sum(nil)
