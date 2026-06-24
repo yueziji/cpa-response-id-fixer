@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
@@ -72,5 +73,33 @@ func TestRepairStreamChunkLeavesUnrelatedEventsAlone(t *testing.T) {
 	}
 	if repaired := repairStreamChunk(req); repaired != nil {
 		t.Fatalf("unexpected repair: %s", repaired)
+	}
+}
+
+func TestHandleMethodSkipsNonResponsesSourceFormat(t *testing.T) {
+	req := pluginapi.StreamChunkInterceptRequest{
+		SourceFormat: "openai",
+		ChunkIndex:   1,
+		Body:         []byte(`data: {"type":"response.completed","response":{"output":[]}}`),
+	}
+	rawReq, errMarshal := json.Marshal(req)
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	rawResp, errHandle := handleMethod(pluginabi.MethodResponseInterceptStreamChunk, rawReq)
+	if errHandle != nil {
+		t.Fatalf("handleMethod: %v", errHandle)
+	}
+	var env envelope
+	if errUnmarshal := json.Unmarshal(rawResp, &env); errUnmarshal != nil {
+		t.Fatalf("unmarshal envelope: %v", errUnmarshal)
+	}
+	var resp pluginapi.StreamChunkInterceptResponse
+	if errUnmarshal := json.Unmarshal(env.Result, &resp); errUnmarshal != nil {
+		t.Fatalf("unmarshal response: %v", errUnmarshal)
+	}
+	if len(resp.Body) != 0 {
+		t.Fatalf("response body = %q, want empty", resp.Body)
 	}
 }
