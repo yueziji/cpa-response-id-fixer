@@ -77,7 +77,7 @@ func pluginRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             "cpa-response-id-fixer",
-			Version:          "0.0.2",
+			Version:          "0.0.3",
 			Author:           "local",
 			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
 			ConfigFields:     []pluginapi.ConfigField{},

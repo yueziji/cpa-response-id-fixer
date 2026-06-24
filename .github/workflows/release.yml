@@ -39,13 +39,6 @@ jobs:
             cc: gcc
             ext: so
             archive: cpa-response-id-fixer-linux-amd64.zip
-          - name: darwin-amd64
-            os: macos-13
-            goos: darwin
-            goarch: amd64
-            cc: clang
-            ext: dylib
-            archive: cpa-response-id-fixer-darwin-amd64.zip
 
     steps:
       - name: Checkout
