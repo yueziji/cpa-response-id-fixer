@@ -13,8 +13,13 @@ import (
 
 const fallbackIDPrefix = "resp_cpa_"
 
+var responseCompletedMarker = []byte("response.completed")
+
 func repairStreamChunk(req pluginapi.StreamChunkInterceptRequest) []byte {
 	if req.ChunkIndex == pluginapi.StreamChunkHeaderInitIndex || len(bytes.TrimSpace(req.Body)) == 0 {
+		return nil
+	}
+	if !bytes.Contains(req.Body, responseCompletedMarker) {
 		return nil
 	}
 	if repaired, changed := repairResponseCompletedJSON(req.Body, req); changed {
